@@ -1,6 +1,9 @@
 const std = @import("std");
 const zap = @import("zap");
 const ClientWeb = @import("clientweb.zig");
+const c = @import("c.zig");
+const errors = @import("errors.zig");
+const sqlite = @import("sqlite.zig");
 
 fn on_request(r: zap.Request) void {
     if (r.path) |the_path| {
@@ -32,6 +35,17 @@ pub fn main() !void {
             },
         );
         defer listener.deinit();
+
+        const db = try sqlite.Database.init(.{
+            .mode = sqlite.Database.Mode.ReadWrite,
+            .path = "data.db",
+        });
+        defer db.deinit();
+
+        // try db.exec("CREATE TABLE users(id TEXT PRIMARY KEY, age FLOAT)", .{});
+        // try db.exec("INSERT INTO users VALUES(\"a\", 21)", .{});
+        // try db.exec("INSERT INTO users VALUES(\"b\", 23)", .{});
+        // try db.exec("INSERT INTO users VALUES(\"c\", NULL)", .{});
 
         // /clients endpoint
         var clientWeb = ClientWeb.init(allocator, "/clients");

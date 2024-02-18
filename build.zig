@@ -1,4 +1,5 @@
 const std = @import("std");
+const LazyPath = std.Build.LazyPath;
 
 // Although this function looks imperative, note that its job is to
 // declaratively construct a build graph that will be executed by an external
@@ -31,6 +32,11 @@ pub fn build(b: *std.Build) void {
     });
     exe.addModule("zap", zap.module("zap"));
     exe.linkLibrary(zap.artifact("facil.io"));
+
+    exe.addIncludePath(.{ .path = "lib/sqlite3" });
+    exe.addCSourceFile(.{ .file = .{ .path = "lib/sqlite3/sqlite3.c" }, .flags = &[_][]const u8{"-std=c99"} });
+    exe.linkLibC();
+    exe.installHeader("lib/sqlite3/sqlite3.h", "sqlite3.h");
 
     // This declares intent for the executable to be installed into the
     // standard location when the user invokes the "install" step (the default
