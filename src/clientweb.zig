@@ -2,6 +2,7 @@ const std = @import("std");
 const zap = @import("zap");
 const Clients = @import("clients.zig");
 const Client = Clients.Client;
+const sqlite = @import("sqlite.zig");
 
 // an Endpoint
 
@@ -11,13 +12,10 @@ alloc: std.mem.Allocator = undefined,
 ep: zap.Endpoint = undefined,
 _clients: Clients = undefined,
 
-pub fn init(
-    a: std.mem.Allocator,
-    client_path: []const u8,
-) Self {
+pub fn init(a: std.mem.Allocator, db: sqlite.Database, client_path: []const u8) Self {
     return .{
         .alloc = a,
-        ._clients = Clients.init(a),
+        ._clients = Clients.init(a, db),
         .ep = zap.Endpoint.init(.{
             .path = client_path,
             .get = getClient,
@@ -55,7 +53,18 @@ fn getClient(e: *zap.Endpoint, r: zap.Request) void {
     if (r.path) |path| {
         // /clients
         if (path.len == e.settings.path.len) {
-            return self.listClients(r);
+            if (self._clients.getAll()) {
+                if (self._clients.toJSON()) |json| {
+                    defer self.alloc.free(json);
+                    r.sendJson(json) catch return;
+                } else |err| {
+                    std.debug.print("GETALL error: {}\n", .{err});
+                    return;
+                }
+            } else |err| {
+                std.debug.print("GETALL error: {}\n", .{err});
+                return;
+            }
         }
         var jsonbuf: [256]u8 = undefined;
         if (self.clientIdFromPath(path)) |id| {
@@ -65,15 +74,6 @@ fn getClient(e: *zap.Endpoint, r: zap.Request) void {
                 }
             }
         }
-    }
-}
-
-fn listClients(self: *Self, r: zap.Request) void {
-    if (self._clients.toJSON()) |json| {
-        defer self.alloc.free(json);
-        r.sendJson(json) catch return;
-    } else |err| {
-        std.debug.print("LIST error: {}\n", .{err});
     }
 }
 

@@ -42,25 +42,12 @@ pub fn main() !void {
         });
         defer db.deinit();
 
-        // try db.exec("CREATE TABLE users(id TEXT PRIMARY KEY, age FLOAT)", .{});
-        // try db.exec("INSERT INTO users VALUES(\"a\", 21)", .{});
-        // try db.exec("INSERT INTO users VALUES(\"b\", 23)", .{});
-        // try db.exec("INSERT INTO users VALUES(\"c\", NULL)", .{});
-
         // /clients endpoint
-        var clientWeb = ClientWeb.init(allocator, "/clients");
+        var clientWeb = ClientWeb.init(allocator, db, "/clients");
         defer clientWeb.deinit();
 
         // register endpoints with the listener
         try listener.register(clientWeb.endpoint());
-
-        // fake some clients
-        var uid: usize = undefined;
-        uid = try clientWeb.clients().add(100000, 0);
-        uid = try clientWeb.clients().add(80000, 0);
-        uid = try clientWeb.clients().add(1000000, 0);
-        uid = try clientWeb.clients().add(10000000, 0);
-        uid = try clientWeb.clients().add(500000, 0);
 
         // listen
         try listener.listen();

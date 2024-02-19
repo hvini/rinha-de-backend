@@ -1,10 +1,12 @@
 const std = @import("std");
 const zap = @import("zap");
+const sqlite = @import("sqlite.zig");
 
 alloc: std.mem.Allocator = undefined,
 clients: std.AutoHashMap(usize, InternalClient) = undefined,
 lock: std.Thread.Mutex = undefined,
 count: usize = 0,
+_db: sqlite.Database = undefined,
 
 pub const Self = @This();
 
@@ -22,8 +24,9 @@ pub const Client = struct {
     saldo_inicial: f64,
 };
 
-pub fn init(a: std.mem.Allocator) Self {
+pub fn init(a: std.mem.Allocator, db: sqlite.Database) Self {
     return .{
+        ._db = db,
         .alloc = a,
         .clients = std.AutoHashMap(usize, InternalClient).init(a),
         .lock = std.Thread.Mutex{},
@@ -62,6 +65,32 @@ pub fn add(self: *Self, lim: ?f64, inicial: ?f64) !usize {
         std.debug.print("add error: {}\n", .{err});
         // make sure we pass on the error
         return err;
+    }
+}
+
+pub fn getAll(self: *Self) !void {
+    const stmt = try self._db.prepare(struct {}, Client, "SELECT * FROM clientes");
+    defer stmt.deinit();
+
+    {
+        try stmt.bind(.{});
+        defer stmt.reset();
+
+        var clients = std.AutoHashMap(usize, InternalClient).init(self.alloc);
+        self.count = 0;
+
+        while (try stmt.step()) |user| {
+            try clients.put(user.id, InternalClient{
+                .id = user.id,
+                .limitebuf = user.limite,
+                .limitelen = 1,
+                .saldoinicialbuf = user.saldo_inicial,
+                .saldoiniciallen = 1,
+            });
+            self.count += 1;
+        }
+
+        self.clients = clients;
     }
 }
 
