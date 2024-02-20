@@ -42,7 +42,13 @@ fn clientIdFromPath(self: *Self, path: []const u8) ?usize {
         if (path[self.ep.settings.path.len] != '/') {
             return null;
         }
-        const idstr = path[self.ep.settings.path.len + 1 ..];
+        // get next slash position
+        var i: usize = self.ep.settings.path.len + 1;
+        while (i < path.len and path[i] != '/') : (i += 1) {}
+        if (i == path.len) {
+            return null;
+        }
+        const idstr = path[self.ep.settings.path.len + 1 .. i];
         return std.fmt.parseUnsigned(usize, idstr, 10) catch null;
     }
     return null;
@@ -51,27 +57,18 @@ fn clientIdFromPath(self: *Self, path: []const u8) ?usize {
 fn getClient(e: *zap.Endpoint, r: zap.Request) void {
     const self = @fieldParentPtr(Self, "ep", e);
     if (r.path) |path| {
-        // /clients
-        if (path.len == e.settings.path.len) {
-            if (self._clients.getAll()) {
-                if (self._clients.toJSON()) |json| {
-                    defer self.alloc.free(json);
-                    r.sendJson(json) catch return;
-                } else |err| {
-                    std.debug.print("GETALL error: {}\n", .{err});
+        if (self.clientIdFromPath(path)) |id| {
+            if (self._clients.get(id)) |json| {
+                defer self.alloc.free(json);
+                if (json.len == 2) {
+                    r.setStatus(zap.StatusCode.not_found);
+                    r.markAsFinished(true);
                     return;
                 }
+                r.sendJson(json) catch return;
             } else |err| {
-                std.debug.print("GETALL error: {}\n", .{err});
+                std.debug.print("GET error: {}\n", .{err});
                 return;
-            }
-        }
-        var jsonbuf: [256]u8 = undefined;
-        if (self.clientIdFromPath(path)) |id| {
-            if (self._clients.get(id)) |client| {
-                if (zap.stringifyBuf(&jsonbuf, client, .{})) |json| {
-                    r.sendJson(json) catch return;
-                }
             }
         }
     }

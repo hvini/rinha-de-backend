@@ -94,17 +94,27 @@ pub fn getAll(self: *Self) !void {
     }
 }
 
-pub fn get(self: *Self, id: usize) ?Client {
+pub fn get(self: *Self, id: usize) ![]const u8 {
     // we don't care about locking here, as our usage-pattern is unlikely to
     // get a client by id that is not known yet
-    if (self.clients.getPtr(id)) |pClient| {
-        return .{
-            .id = pClient.id,
-            .limite = pClient.limitebuf,
-            .saldo_inicial = pClient.saldoinicialbuf,
-        };
+    const stmt = try self._db.prepare(struct { id: usize }, Client, "SELECT * FROM clientes WHERE id = :id");
+    defer stmt.deinit();
+
+    {
+        try stmt.bind(.{ .id = id });
+        defer stmt.reset();
+
+        if (try stmt.step()) |pClient| {
+            var client: Client = .{
+                .id = pClient.id,
+                .limite = pClient.limite,
+                .saldo_inicial = pClient.saldo_inicial,
+            };
+            return std.json.stringifyAlloc(self.alloc, client, .{});
+        } else {
+            return std.json.stringifyAlloc(self.alloc, .{}, .{});
+        }
     }
-    return null;
 }
 
 pub fn toJSON(self: *Self) ![]const u8 {

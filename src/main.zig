@@ -43,7 +43,7 @@ pub fn main() !void {
         defer db.deinit();
 
         // /clients endpoint
-        var clientWeb = ClientWeb.init(allocator, db, "/clients");
+        var clientWeb = ClientWeb.init(allocator, db, "/clientes");
         defer clientWeb.deinit();
 
         // register endpoints with the listener
