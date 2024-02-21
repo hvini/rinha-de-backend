@@ -44,7 +44,6 @@ pub fn main() !void {
 
         // /clients endpoint
         var clientWeb = ClientWeb.init(allocator, db, "/clientes");
-        defer clientWeb.deinit();
 
         // register endpoints with the listener
         try listener.register(clientWeb.endpoint());

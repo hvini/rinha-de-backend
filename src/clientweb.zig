@@ -25,10 +25,6 @@ pub fn init(a: std.mem.Allocator, db: sqlite.Database, client_path: []const u8) 
     };
 }
 
-pub fn deinit(self: *Self) void {
-    self._clients.deinit();
-}
-
 pub fn clients(self: *Self) *Clients {
     return &self._clients;
 }
@@ -76,17 +72,31 @@ fn getClient(e: *zap.Endpoint, r: zap.Request) void {
 
 fn postClient(e: *zap.Endpoint, r: zap.Request) void {
     const self = @fieldParentPtr(Self, "ep", e);
-    if (r.body) |body| {
-        var maybe_client: ?std.json.Parsed(Client) = std.json.parseFromSlice(Client, self.alloc, body, .{}) catch null;
-        if (maybe_client) |u| {
-            defer u.deinit();
-            if (self._clients.add(u.value.limite, u.value.saldo_inicial)) |id| {
-                var jsonbuf: [128]u8 = undefined;
-                if (zap.stringifyBuf(&jsonbuf, .{ .status = "OK", .id = id }, .{})) |json| {
-                    r.sendJson(json) catch return;
+    if (r.path) |path| {
+        if (self.clientIdFromPath(path)) |id| {
+            if (self._clients.get(id)) |res| {
+                defer self.alloc.free(res);
+                if (res.len == 2) {
+                    r.setStatus(zap.StatusCode.not_found);
+                    r.markAsFinished(true);
+                    return;
+                }
+                if (r.body) |body| {
+                    const TransactionRes = struct { valor: f64, tipo: []const u8, descricao: []const u8 };
+                    var maybe_transaction: ?std.json.Parsed(TransactionRes) = std.json.parseFromSlice(TransactionRes, self.alloc, body, .{}) catch null;
+                    if (maybe_transaction) |u| {
+                        defer u.deinit();
+                        if (self._clients.add(id, u.value.valor, u.value.tipo, u.value.descricao)) |json| {
+                            defer self.alloc.free(json);
+                            r.sendJson(json) catch return;
+                        } else |err| {
+                            std.debug.print("ADDING error: {}\n", .{err});
+                            return;
+                        }
+                    }
                 }
             } else |err| {
-                std.debug.print("ADDING error: {}\n", .{err});
+                std.debug.print("POST error: {}\n", .{err});
                 return;
             }
         }
