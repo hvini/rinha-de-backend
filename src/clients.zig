@@ -4,6 +4,7 @@ const sqlite = @import("sqlite.zig");
 
 alloc: std.mem.Allocator = undefined,
 lock: std.Thread.Mutex = undefined,
+transactions: std.AutoHashMap(usize, InternalTransaction) = undefined,
 _db: sqlite.Database = undefined,
 
 pub const Self = @This();
@@ -14,21 +15,44 @@ pub const Client = struct {
     saldo_inicial: f64,
 };
 
-pub const Transacao = struct {
+pub const DbTransaction = struct {
     id: usize,
     cliente_id: usize,
+    valor: f64,
+    tipo: sqlite.Text,
+    descricao: sqlite.Text,
+    realizada_em: sqlite.Text,
+};
+
+pub const Transaction = struct {
     valor: f64,
     tipo: []const u8,
     descricao: []const u8,
     realizada_em: []const u8,
 };
 
+pub const InternalTransaction = struct {
+    valorbuf: f64,
+    valorlen: usize,
+    tipobuf: []const u8,
+    tipolen: usize,
+    descricaobuf: []const u8,
+    descricaolen: usize,
+    realizada_embuf: []const u8,
+    realizadaemlen: usize,
+};
+
 pub fn init(a: std.mem.Allocator, db: sqlite.Database) Self {
     return .{
         ._db = db,
         .alloc = a,
+        .transactions = std.AutoHashMap(usize, InternalTransaction).init(a),
         .lock = std.Thread.Mutex{},
     };
+}
+
+pub fn deinit(self: *Self) void {
+    self.transactions.deinit();
 }
 
 pub fn add(self: *Self, id: usize, valor: f64, tipo: []const u8, descricao: []const u8) ![]const u8 {
@@ -50,22 +74,95 @@ pub fn add(self: *Self, id: usize, valor: f64, tipo: []const u8, descricao: []co
 }
 
 pub fn get(self: *Self, id: usize) ![]const u8 {
-    const stmt = try self._db.prepare(struct { id: usize }, Client, "SELECT * FROM clientes WHERE id = :id");
-    defer stmt.deinit();
+    const client = try self._db.prepare(struct { id: usize }, Client, "SELECT * FROM clientes WHERE id = :id");
+    defer client.deinit();
 
-    {
-        try stmt.bind(.{ .id = id });
-        defer stmt.reset();
+    try client.bind(.{ .id = id });
+    defer client.reset();
 
-        if (try stmt.step()) |pClient| {
-            var client: Client = .{
-                .id = pClient.id,
-                .limite = pClient.limite,
-                .saldo_inicial = pClient.saldo_inicial,
-            };
-            return std.json.stringifyAlloc(self.alloc, client, .{});
-        } else {
-            return std.json.stringifyAlloc(self.alloc, .{}, .{});
-        }
+    var c: Client = undefined;
+    if (try client.step()) |pClient| {
+        c = pClient;
+    } else {
+        return std.json.stringifyAlloc(self.alloc, .{}, .{});
     }
+
+    const transactions = try self._db.prepare(struct { cliente_id: usize }, DbTransaction, "SELECT * FROM transacoes WHERE cliente_id = :cliente_id LIMIT 10");
+    defer transactions.deinit();
+
+    try transactions.bind(.{ .cliente_id = id });
+    defer transactions.reset();
+
+    var t = std.AutoHashMap(usize, InternalTransaction).init(self.alloc);
+    while (try transactions.step()) |pTransacao| {
+        try t.put(pTransacao.id, InternalTransaction{
+            .valorbuf = pTransacao.valor,
+            .valorlen = 0,
+            .tipobuf = pTransacao.tipo.data,
+            .tipolen = pTransacao.tipo.data.len,
+            .descricaobuf = pTransacao.descricao.data,
+            .descricaolen = pTransacao.descricao.data.len,
+            .realizada_embuf = pTransacao.realizada_em.data,
+            .realizadaemlen = pTransacao.realizada_em.data.len,
+        });
+    }
+
+    return try self.toJSON(c, t);
 }
+
+pub fn toJSON(self: *Self, client: Client, t: std.AutoHashMap(usize, InternalTransaction)) ![]const u8 {
+    self.lock.lock();
+    defer self.lock.unlock();
+
+    var l: std.ArrayList(Transaction) = std.ArrayList(Transaction).init(self.alloc);
+    defer l.deinit();
+
+    var it = JsonIteratorWithRaceCondition.init(&t);
+    while (it.next()) |transaction| {
+        try l.append(transaction);
+    }
+
+    var result = .{
+        .saldo = .{
+            .total = client.saldo_inicial,
+            .data_extrato = std.time.timestamp(),
+            .limite = client.limite,
+        },
+        .ultimas_transacoes = l.items,
+    };
+
+    return std.json.stringifyAlloc(self.alloc, result, .{});
+}
+
+const JsonIteratorWithRaceCondition = struct {
+    it: std.AutoHashMap(usize, InternalTransaction).ValueIterator = undefined,
+    const This = @This();
+
+    pub fn init(internal_transactions: *std.AutoHashMap(usize, InternalTransaction)) This {
+        return .{
+            .it = internal_transactions.valueIterator(),
+        };
+    }
+
+    pub fn next(this: *This) ?Transaction {
+        if (this.it.next()) |pTransaction| {
+            var transaction: Transaction = .{
+                .valor = pTransaction.*.valorbuf,
+                .tipo = pTransaction.*.tipobuf,
+                .descricao = pTransaction.*.descricaobuf,
+                .realizada_em = pTransaction.*.realizada_embuf,
+            };
+            if (pTransaction.*.tipolen == 0) {
+                transaction.tipo = undefined;
+            }
+            if (pTransaction.*.descricaolen == 0) {
+                transaction.descricao = undefined;
+            }
+            if (pTransaction.*.realizadaemlen == 0) {
+                transaction.realizada_em = undefined;
+            }
+            return transaction;
+        }
+        return null;
+    }
+};

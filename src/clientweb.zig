@@ -25,6 +25,10 @@ pub fn init(a: std.mem.Allocator, db: sqlite.Database, client_path: []const u8) 
     };
 }
 
+pub fn deinit(self: *Self) void {
+    self._clients.deinit();
+}
+
 pub fn clients(self: *Self) *Clients {
     return &self._clients;
 }
