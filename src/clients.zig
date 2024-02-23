@@ -34,11 +34,11 @@ pub const Transaction = struct {
 pub const InternalTransaction = struct {
     valorbuf: f64,
     valorlen: usize,
-    tipobuf: []const u8,
+    tipobuf: [512]u8,
     tipolen: usize,
-    descricaobuf: []const u8,
+    descricaobuf: [512]u8,
     descricaolen: usize,
-    realizada_embuf: []const u8,
+    realizadaembuf: [512]u8,
     realizadaemlen: usize,
 };
 
@@ -93,31 +93,37 @@ pub fn get(self: *Self, id: usize) ![]const u8 {
     try transactions.bind(.{ .cliente_id = id });
     defer transactions.reset();
 
-    var t = std.AutoHashMap(usize, InternalTransaction).init(self.alloc);
+    self.transactions.deinit();
+    self.transactions = std.AutoHashMap(usize, InternalTransaction).init(self.alloc);
+
     while (try transactions.step()) |pTransacao| {
-        try t.put(pTransacao.id, InternalTransaction{
-            .valorbuf = pTransacao.valor,
-            .valorlen = 0,
-            .tipobuf = pTransacao.tipo.data,
-            .tipolen = pTransacao.tipo.data.len,
-            .descricaobuf = pTransacao.descricao.data,
-            .descricaolen = pTransacao.descricao.data.len,
-            .realizada_embuf = pTransacao.realizada_em.data,
-            .realizadaemlen = pTransacao.realizada_em.data.len,
-        });
+        var internal: InternalTransaction = undefined;
+
+        internal.valorbuf = pTransacao.valor;
+        internal.valorlen = 0;
+        std.mem.copy(u8, internal.tipobuf[0..], pTransacao.tipo.data);
+        internal.tipolen = pTransacao.tipo.data.len;
+        std.mem.copy(u8, internal.descricaobuf[0..], pTransacao.descricao.data);
+        internal.descricaolen = pTransacao.descricao.data.len;
+        std.mem.copy(u8, internal.realizadaembuf[0..], pTransacao.realizada_em.data);
+        internal.realizadaemlen = pTransacao.realizada_em.data.len;
+
+        self.lock.lock();
+        defer self.lock.unlock();
+        try self.transactions.put(pTransacao.id, internal);
     }
 
-    return try self.toJSON(c, t);
+    return try self.toJSON(c);
 }
 
-pub fn toJSON(self: *Self, client: Client, t: std.AutoHashMap(usize, InternalTransaction)) ![]const u8 {
+pub fn toJSON(self: *Self, client: Client) ![]const u8 {
     self.lock.lock();
     defer self.lock.unlock();
 
     var l: std.ArrayList(Transaction) = std.ArrayList(Transaction).init(self.alloc);
     defer l.deinit();
 
-    var it = JsonIteratorWithRaceCondition.init(&t);
+    var it = JsonIteratorWithRaceCondition.init(&self.transactions);
     while (it.next()) |transaction| {
         try l.append(transaction);
     }
@@ -148,18 +154,18 @@ const JsonIteratorWithRaceCondition = struct {
         if (this.it.next()) |pTransaction| {
             var transaction: Transaction = .{
                 .valor = pTransaction.*.valorbuf,
-                .tipo = pTransaction.*.tipobuf,
-                .descricao = pTransaction.*.descricaobuf,
-                .realizada_em = pTransaction.*.realizada_embuf,
+                .tipo = pTransaction.*.tipobuf[0..pTransaction.*.tipolen],
+                .descricao = pTransaction.*.descricaobuf[0..pTransaction.*.descricaolen],
+                .realizada_em = pTransaction.*.realizadaembuf[0..pTransaction.*.realizadaemlen],
             };
             if (pTransaction.*.tipolen == 0) {
-                transaction.tipo = undefined;
+                transaction.tipo = "";
             }
             if (pTransaction.*.descricaolen == 0) {
-                transaction.descricao = undefined;
+                transaction.descricao = "";
             }
             if (pTransaction.*.realizadaemlen == 0) {
-                transaction.realizada_em = undefined;
+                transaction.realizada_em = "";
             }
             return transaction;
         }
