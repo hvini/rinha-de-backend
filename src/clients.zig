@@ -11,28 +11,28 @@ pub const Self = @This();
 
 pub const Client = struct {
     id: usize,
-    limite: f64,
-    saldo_inicial: f64,
+    limite: u64,
+    saldo_inicial: u64,
 };
 
 pub const DbTransaction = struct {
     id: usize,
     cliente_id: usize,
-    valor: f64,
+    valor: u64,
     tipo: sqlite.Text,
     descricao: sqlite.Text,
     realizada_em: sqlite.Text,
 };
 
 pub const Transaction = struct {
-    valor: f64,
+    valor: u64,
     tipo: []const u8,
     descricao: []const u8,
     realizada_em: []const u8,
 };
 
 pub const InternalTransaction = struct {
-    valorbuf: f64,
+    valorbuf: u64,
     valorlen: usize,
     tipobuf: [512]u8,
     tipolen: usize,
@@ -55,12 +55,12 @@ pub fn deinit(self: *Self) void {
     self.transactions.deinit();
 }
 
-pub fn add(self: *Self, id: usize, valor: f64, tipo: []const u8, descricao: []const u8) ![]const u8 {
+pub fn add(self: *Self, id: usize, valor: u64, tipo: []const u8, descricao: []const u8) ![]const u8 {
     // We lock only on insertion, deletion, and listing
     self.lock.lock();
     defer self.lock.unlock();
 
-    const stmt = try self._db.prepare(struct { cliente_id: usize, valor: f64, tipo: sqlite.Text, descricao: sqlite.Text }, void, "INSERT INTO transacoes (cliente_id, valor, tipo, descricao) VALUES (:cliente_id, :valor, :tipo, :descricao)");
+    const stmt = try self._db.prepare(struct { cliente_id: usize, valor: u64, tipo: sqlite.Text, descricao: sqlite.Text }, void, "INSERT INTO transacoes (cliente_id, valor, tipo, descricao) VALUES (:cliente_id, :valor, :tipo, :descricao)");
     defer stmt.deinit();
 
     try stmt.exec(.{
@@ -87,7 +87,7 @@ pub fn get(self: *Self, id: usize) ![]const u8 {
         return std.json.stringifyAlloc(self.alloc, .{}, .{});
     }
 
-    const transactions = try self._db.prepare(struct { cliente_id: usize }, DbTransaction, "SELECT * FROM transacoes WHERE cliente_id = :cliente_id LIMIT 10");
+    const transactions = try self._db.prepare(struct { cliente_id: usize }, DbTransaction, "SELECT * FROM transacoes WHERE cliente_id = :cliente_id ORDER BY realizada_em DESC LIMIT 10");
     defer transactions.deinit();
 
     try transactions.bind(.{ .cliente_id = id });

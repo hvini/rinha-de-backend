@@ -1,7 +1,7 @@
 create table clientes (
-    id integer primary key autoincrement,
-    limite float,
-    saldo_inicial float
+    id integer primary key autoincrement not null,
+    limite integer not null,
+    saldo_inicial integer not null
 );
 
 insert into clientes (limite, saldo_inicial) values (100000, 0);
@@ -11,11 +11,11 @@ insert into clientes (limite, saldo_inicial) values (10000000, 0);
 insert into clientes (limite, saldo_inicial) values (500000, 0);
 
 create table transacoes (
-    id integer primary key autoincrement,
-    cliente_id integer,
-    valor float,
-    tipo text,
-    descricao text,
-    realizada_em datetime default current_timestamp,
+    id integer primary key autoincrement not null,
+    cliente_id integer not null,
+    valor integer not null,
+    tipo text check (tipo in ('c', 'd')) not null,
+    descricao text not null,
+    realizada_em datetime not null default current_timestamp,
     foreign key (cliente_id) references clientes(id)
 );

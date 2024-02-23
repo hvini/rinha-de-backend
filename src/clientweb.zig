@@ -86,7 +86,7 @@ fn postClient(e: *zap.Endpoint, r: zap.Request) void {
                     return;
                 }
                 if (r.body) |body| {
-                    const TransactionRes = struct { valor: f64, tipo: []const u8, descricao: []const u8 };
+                    const TransactionRes = struct { valor: u64, tipo: []const u8, descricao: []const u8 };
                     var maybe_transaction: ?std.json.Parsed(TransactionRes) = std.json.parseFromSlice(TransactionRes, self.alloc, body, .{}) catch null;
                     if (maybe_transaction) |u| {
                         defer u.deinit();
