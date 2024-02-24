@@ -16,6 +16,6 @@ create table transacoes (
     valor integer not null,
     tipo text check (tipo in ('c', 'd')) not null,
     descricao text not null,
-    realizada_em datetime not null default current_timestamp,
+    realizada_em integer not null,
     foreign key (cliente_id) references clientes(id)
 );

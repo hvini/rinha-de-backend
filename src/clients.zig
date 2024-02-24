@@ -4,7 +4,7 @@ const sqlite = @import("sqlite.zig");
 
 alloc: std.mem.Allocator = undefined,
 lock: std.Thread.Mutex = undefined,
-transactions: std.AutoHashMap(usize, InternalTransaction) = undefined,
+transactions: std.AutoArrayHashMap(i64, InternalTransaction) = undefined,
 _db: sqlite.Database = undefined,
 
 pub const Self = @This();
@@ -16,19 +16,18 @@ pub const Client = struct {
 };
 
 pub const DbTransaction = struct {
-    id: usize,
     cliente_id: usize,
     valor: u64,
     tipo: sqlite.Text,
     descricao: sqlite.Text,
-    realizada_em: sqlite.Text,
+    realizada_em: i64,
 };
 
 pub const Transaction = struct {
     valor: u64,
     tipo: []const u8,
     descricao: []const u8,
-    realizada_em: []const u8,
+    realizada_em: i64,
 };
 
 pub const InternalTransaction = struct {
@@ -38,7 +37,7 @@ pub const InternalTransaction = struct {
     tipolen: usize,
     descricaobuf: [512]u8,
     descricaolen: usize,
-    realizadaembuf: [512]u8,
+    realizadaembuf: i64,
     realizadaemlen: usize,
 };
 
@@ -46,7 +45,7 @@ pub fn init(a: std.mem.Allocator, db: sqlite.Database) Self {
     return .{
         ._db = db,
         .alloc = a,
-        .transactions = std.AutoHashMap(usize, InternalTransaction).init(a),
+        .transactions = std.AutoArrayHashMap(i64, InternalTransaction).init(a),
         .lock = std.Thread.Mutex{},
     };
 }
@@ -60,7 +59,7 @@ pub fn add(self: *Self, id: usize, valor: u64, tipo: []const u8, descricao: []co
     self.lock.lock();
     defer self.lock.unlock();
 
-    const stmt = try self._db.prepare(struct { cliente_id: usize, valor: u64, tipo: sqlite.Text, descricao: sqlite.Text }, void, "INSERT INTO transacoes (cliente_id, valor, tipo, descricao) VALUES (:cliente_id, :valor, :tipo, :descricao)");
+    const stmt = try self._db.prepare(DbTransaction, void, "INSERT INTO transacoes (cliente_id, valor, tipo, descricao, realizada_em) VALUES (:cliente_id, :valor, :tipo, :descricao, :realizada_em)");
     defer stmt.deinit();
 
     try stmt.exec(.{
@@ -68,6 +67,7 @@ pub fn add(self: *Self, id: usize, valor: u64, tipo: []const u8, descricao: []co
         .valor = valor,
         .tipo = sqlite.text(tipo),
         .descricao = sqlite.text(descricao),
+        .realizada_em = std.time.timestamp(),
     });
 
     return std.json.stringifyAlloc(self.alloc, .{}, .{});
@@ -94,7 +94,7 @@ pub fn get(self: *Self, id: usize) ![]const u8 {
     defer transactions.reset();
 
     self.transactions.deinit();
-    self.transactions = std.AutoHashMap(usize, InternalTransaction).init(self.alloc);
+    self.transactions = std.AutoArrayHashMap(i64, InternalTransaction).init(self.alloc);
 
     while (try transactions.step()) |pTransacao| {
         var internal: InternalTransaction = undefined;
@@ -105,12 +105,12 @@ pub fn get(self: *Self, id: usize) ![]const u8 {
         internal.tipolen = pTransacao.tipo.data.len;
         std.mem.copy(u8, internal.descricaobuf[0..], pTransacao.descricao.data);
         internal.descricaolen = pTransacao.descricao.data.len;
-        std.mem.copy(u8, internal.realizadaembuf[0..], pTransacao.realizada_em.data);
-        internal.realizadaemlen = pTransacao.realizada_em.data.len;
+        internal.realizadaembuf = pTransacao.realizada_em;
+        internal.realizadaemlen = 0;
 
         self.lock.lock();
         defer self.lock.unlock();
-        try self.transactions.put(pTransacao.id, internal);
+        try self.transactions.put(pTransacao.realizada_em, internal);
     }
 
     return try self.toJSON(c);
@@ -141,31 +141,28 @@ pub fn toJSON(self: *Self, client: Client) ![]const u8 {
 }
 
 const JsonIteratorWithRaceCondition = struct {
-    it: std.AutoHashMap(usize, InternalTransaction).ValueIterator = undefined,
+    it: std.AutoArrayHashMap(i64, InternalTransaction).Iterator = undefined,
     const This = @This();
 
-    pub fn init(internal_transactions: *std.AutoHashMap(usize, InternalTransaction)) This {
+    pub fn init(internal_transactions: *std.AutoArrayHashMap(i64, InternalTransaction)) This {
         return .{
-            .it = internal_transactions.valueIterator(),
+            .it = internal_transactions.iterator(),
         };
     }
 
     pub fn next(this: *This) ?Transaction {
         if (this.it.next()) |pTransaction| {
             var transaction: Transaction = .{
-                .valor = pTransaction.*.valorbuf,
-                .tipo = pTransaction.*.tipobuf[0..pTransaction.*.tipolen],
-                .descricao = pTransaction.*.descricaobuf[0..pTransaction.*.descricaolen],
-                .realizada_em = pTransaction.*.realizadaembuf[0..pTransaction.*.realizadaemlen],
+                .valor = pTransaction.value_ptr.valorbuf,
+                .tipo = pTransaction.value_ptr.tipobuf[0..pTransaction.value_ptr.tipolen],
+                .descricao = pTransaction.value_ptr.descricaobuf[0..pTransaction.value_ptr.descricaolen],
+                .realizada_em = pTransaction.value_ptr.realizadaembuf,
             };
-            if (pTransaction.*.tipolen == 0) {
+            if (pTransaction.value_ptr.tipolen == 0) {
                 transaction.tipo = "";
             }
-            if (pTransaction.*.descricaolen == 0) {
+            if (pTransaction.value_ptr.descricaolen == 0) {
                 transaction.descricao = "";
-            }
-            if (pTransaction.*.realizadaemlen == 0) {
-                transaction.realizada_em = "";
             }
             return transaction;
         }
