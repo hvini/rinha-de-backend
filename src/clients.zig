@@ -27,7 +27,7 @@ pub const Transaction = struct {
     valor: u64,
     tipo: []const u8,
     descricao: []const u8,
-    realizada_em: i64,
+    realizada_em: [20]u8,
 };
 
 pub const InternalTransaction = struct {
@@ -93,8 +93,10 @@ pub fn get(self: *Self, id: usize) ![]const u8 {
     try transactions.bind(.{ .cliente_id = id });
     defer transactions.reset();
 
-    self.transactions.deinit();
-    self.transactions = std.AutoArrayHashMap(i64, InternalTransaction).init(self.alloc);
+    if (self.transactions.count() > 0) {
+        self.deinit();
+        self.transactions = std.AutoArrayHashMap(i64, InternalTransaction).init(self.alloc);
+    }
 
     while (try transactions.step()) |pTransacao| {
         var internal: InternalTransaction = undefined;
@@ -116,6 +118,82 @@ pub fn get(self: *Self, id: usize) ![]const u8 {
     return try self.toJSON(c);
 }
 
+pub const DateTime = struct {
+    year: u16,
+    month: u8,
+    day: u8,
+    hour: u8,
+    minute: u8,
+    second: u8,
+};
+
+pub fn fromTimestamp(ts: u64) DateTime {
+    const SECONDS_PER_DAY = 86400;
+    const DAYS_PER_YEAR = 365;
+    const DAYS_IN_4YEARS = 1461;
+    const DAYS_IN_100YEARS = 36524;
+    const DAYS_IN_400YEARS = 146097;
+    const DAYS_BEFORE_EPOCH = 719468;
+
+    const seconds_since_midnight: u64 = @rem(ts, SECONDS_PER_DAY);
+    var day_n: u64 = DAYS_BEFORE_EPOCH + ts / SECONDS_PER_DAY;
+    var temp: u64 = 0;
+
+    temp = 4 * (day_n + DAYS_IN_100YEARS + 1) / DAYS_IN_400YEARS - 1;
+    var year: u16 = @intCast(100 * temp);
+    day_n -= DAYS_IN_100YEARS * temp + temp / 4;
+
+    temp = 4 * (day_n + DAYS_PER_YEAR + 1) / DAYS_IN_4YEARS - 1;
+    year += @intCast(temp);
+    day_n -= DAYS_PER_YEAR * temp + temp / 4;
+
+    var month: u8 = @intCast((5 * day_n + 2) / 153);
+    const day: u8 = @intCast(day_n - (@as(u64, @intCast(month)) * 153 + 2) / 5 + 1);
+
+    month += 3;
+    if (month > 12) {
+        month -= 12;
+        year += 1;
+    }
+
+    return DateTime{ .year = year, .month = month, .day = day, .hour = @intCast(seconds_since_midnight / 3600), .minute = @intCast(seconds_since_midnight % 3600 / 60), .second = @intCast(seconds_since_midnight % 60) };
+}
+
+pub fn toRFC3339(dt: DateTime) [20]u8 {
+    var buf: [20]u8 = undefined;
+    _ = std.fmt.formatIntBuf(buf[0..4], dt.year, 10, .lower, .{ .width = 4, .fill = '0' });
+    buf[4] = '-';
+    paddingTwoDigits(buf[5..7], dt.month);
+    buf[7] = '-';
+    paddingTwoDigits(buf[8..10], dt.day);
+    buf[10] = 'T';
+
+    paddingTwoDigits(buf[11..13], dt.hour);
+    buf[13] = ':';
+    paddingTwoDigits(buf[14..16], dt.minute);
+    buf[16] = ':';
+    paddingTwoDigits(buf[17..19], dt.second);
+    buf[19] = 'Z';
+
+    return buf;
+}
+
+fn paddingTwoDigits(buf: *[2]u8, value: u8) void {
+    switch (value) {
+        0 => buf.* = "00".*,
+        1 => buf.* = "01".*,
+        2 => buf.* = "02".*,
+        3 => buf.* = "03".*,
+        4 => buf.* = "04".*,
+        5 => buf.* = "05".*,
+        6 => buf.* = "06".*,
+        7 => buf.* = "07".*,
+        8 => buf.* = "08".*,
+        9 => buf.* = "09".*,
+        else => _ = std.fmt.formatIntBuf(buf, value, 10, .lower, .{}),
+    }
+}
+
 pub fn toJSON(self: *Self, client: Client) ![]const u8 {
     self.lock.lock();
     defer self.lock.unlock();
@@ -128,10 +206,11 @@ pub fn toJSON(self: *Self, client: Client) ![]const u8 {
         try l.append(transaction);
     }
 
+    const dt = fromTimestamp(@intCast(std.time.timestamp()));
     var result = .{
         .saldo = .{
             .total = client.saldo_inicial,
-            .data_extrato = std.time.timestamp(),
+            .data_extrato = toRFC3339(dt),
             .limite = client.limite,
         },
         .ultimas_transacoes = l.items,
@@ -152,11 +231,12 @@ const JsonIteratorWithRaceCondition = struct {
 
     pub fn next(this: *This) ?Transaction {
         if (this.it.next()) |pTransaction| {
+            const dt = fromTimestamp(@intCast(pTransaction.value_ptr.realizadaembuf));
             var transaction: Transaction = .{
                 .valor = pTransaction.value_ptr.valorbuf,
                 .tipo = pTransaction.value_ptr.tipobuf[0..pTransaction.value_ptr.tipolen],
                 .descricao = pTransaction.value_ptr.descricaobuf[0..pTransaction.value_ptr.descricaolen],
-                .realizada_em = pTransaction.value_ptr.realizadaembuf,
+                .realizada_em = toRFC3339(dt),
             };
             if (pTransaction.value_ptr.tipolen == 0) {
                 transaction.tipo = "";
