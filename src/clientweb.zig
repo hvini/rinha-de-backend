@@ -2,9 +2,8 @@ const std = @import("std");
 const zap = @import("zap");
 const Clients = @import("clients.zig");
 const Client = Clients.Client;
+const TransactionRes = Clients.TransactionRes;
 const sqlite = @import("sqlite.zig");
-
-// an Endpoint
 
 pub const Self = @This();
 
@@ -58,16 +57,16 @@ fn getClient(e: *zap.Endpoint, r: zap.Request) void {
     const self = @fieldParentPtr(Self, "ep", e);
     if (r.path) |path| {
         if (self.clientIdFromPath(path)) |id| {
-            if (self._clients.get(id)) |json| {
-                defer self.alloc.free(json);
-                if (json.len == 2) {
-                    r.setStatus(zap.StatusCode.not_found);
-                    r.markAsFinished(true);
-                    return;
+            if (self._clients.get(id)) |client| {
+                if (self._clients.toJSON(client)) |json| {
+                    defer self.alloc.free(json);
+                    r.sendJson(json) catch return;
+                } else |err| {
+                    r.sendError(err, 500);
                 }
-                r.sendJson(json) catch return;
-            } else |err| {
-                std.debug.print("GET error: {}\n", .{err});
+            } else |_| {
+                r.setStatus(zap.StatusCode.not_found);
+                r.markAsFinished(true);
                 return;
             }
         }
@@ -78,30 +77,23 @@ fn postClient(e: *zap.Endpoint, r: zap.Request) void {
     const self = @fieldParentPtr(Self, "ep", e);
     if (r.path) |path| {
         if (self.clientIdFromPath(path)) |id| {
-            if (self._clients.get(id)) |res| {
-                defer self.alloc.free(res);
-                if (res.len == 2) {
-                    r.setStatus(zap.StatusCode.not_found);
-                    r.markAsFinished(true);
-                    return;
-                }
+            if (self._clients.get(id)) |client| {
                 if (r.body) |body| {
-                    const TransactionRes = struct { valor: u64, tipo: []const u8, descricao: []const u8 };
-                    var maybe_transaction: ?std.json.Parsed(TransactionRes) = std.json.parseFromSlice(TransactionRes, self.alloc, body, .{}) catch null;
-                    if (maybe_transaction) |u| {
+                    if (std.json.parseFromSlice(TransactionRes, self.alloc, body, .{})) |u| {
                         defer u.deinit();
-                        if (self._clients.add(id, u.value.valor, u.value.tipo, u.value.descricao)) |json| {
+                        if (self._clients.add(client, u.value)) |json| {
                             defer self.alloc.free(json);
                             r.sendJson(json) catch return;
                         } else |err| {
-                            std.debug.print("ADDING error: {}\n", .{err});
-                            return;
+                            r.sendError(err, 422);
                         }
+                    } else |err| {
+                        r.sendError(err, 422);
                     }
                 }
-            } else |err| {
-                std.debug.print("POST error: {}\n", .{err});
-                return;
+            } else |_| {
+                r.setStatus(zap.StatusCode.not_found);
+                r.markAsFinished(true);
             }
         }
     }

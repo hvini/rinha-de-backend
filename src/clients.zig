@@ -11,27 +11,29 @@ pub const Self = @This();
 
 pub const Client = struct {
     id: usize,
-    limite: u64,
-    saldo_inicial: u64,
+    limite: i64,
+    saldo_inicial: i64,
 };
+
+pub const TransactionRes = struct { valor: i64, tipo: []const u8, descricao: []const u8 };
 
 pub const DbTransaction = struct {
     cliente_id: usize,
-    valor: u64,
+    valor: i64,
     tipo: sqlite.Text,
     descricao: sqlite.Text,
     realizada_em: i64,
 };
 
 pub const Transaction = struct {
-    valor: u64,
+    valor: i64,
     tipo: []const u8,
     descricao: []const u8,
     realizada_em: [20]u8,
 };
 
 pub const InternalTransaction = struct {
-    valorbuf: u64,
+    valorbuf: i64,
     valorlen: usize,
     tipobuf: [512]u8,
     tipolen: usize,
@@ -54,26 +56,57 @@ pub fn deinit(self: *Self) void {
     self.transactions.deinit();
 }
 
-pub fn add(self: *Self, id: usize, valor: u64, tipo: []const u8, descricao: []const u8) ![]const u8 {
-    // We lock only on insertion, deletion, and listing
+pub fn add(self: *Self, client: Client, u: TransactionRes) ![]const u8 {
+    if (!std.mem.eql(u8, u.tipo[0..], "d") and !std.mem.eql(u8, u.tipo[0..], "c")) {
+        return error.InvalidType;
+    }
+
+    if (u.descricao.len == 0 or u.descricao.len > 10) {
+        return error.InvalidDescription;
+    }
+
+    var total = client.saldo_inicial;
+    if (std.mem.eql(u8, u.tipo[0..], "d")) {
+        total -= u.valor;
+        if (std.math.absCast(total) > client.limite) {
+            return error.LimitExceeded;
+        }
+    } else {
+        total += u.valor;
+    }
+
+    // // We lock only on insertion, deletion, and listing
     self.lock.lock();
     defer self.lock.unlock();
 
-    const stmt = try self._db.prepare(DbTransaction, void, "INSERT INTO transacoes (cliente_id, valor, tipo, descricao, realizada_em) VALUES (:cliente_id, :valor, :tipo, :descricao, :realizada_em)");
-    defer stmt.deinit();
+    // update client
+    const clientStmt = try self._db.prepare(struct { id: usize, saldo_inicial: i64 }, void, "UPDATE clientes SET saldo_inicial = :saldo_inicial WHERE id = :id");
+    defer clientStmt.deinit();
 
-    try stmt.exec(.{
-        .cliente_id = id,
-        .valor = valor,
-        .tipo = sqlite.text(tipo),
-        .descricao = sqlite.text(descricao),
+    try clientStmt.exec(.{
+        .id = client.id,
+        .saldo_inicial = total,
+    });
+
+    // create transaction
+    const transactionStmt = try self._db.prepare(DbTransaction, void, "INSERT INTO transacoes (cliente_id, valor, tipo, descricao, realizada_em) VALUES (:cliente_id, :valor, :tipo, :descricao, :realizada_em)");
+    defer transactionStmt.deinit();
+
+    try transactionStmt.exec(.{
+        .cliente_id = client.id,
+        .valor = u.valor,
+        .tipo = sqlite.text(u.tipo),
+        .descricao = sqlite.text(u.descricao),
         .realizada_em = std.time.timestamp(),
     });
 
-    return std.json.stringifyAlloc(self.alloc, .{}, .{});
+    return std.json.stringifyAlloc(self.alloc, .{
+        .limite = client.limite,
+        .saldo = total,
+    }, .{});
 }
 
-pub fn get(self: *Self, id: usize) ![]const u8 {
+pub fn get(self: *Self, id: usize) !Client {
     const client = try self._db.prepare(struct { id: usize }, Client, "SELECT * FROM clientes WHERE id = :id");
     defer client.deinit();
 
@@ -84,7 +117,7 @@ pub fn get(self: *Self, id: usize) ![]const u8 {
     if (try client.step()) |pClient| {
         c = pClient;
     } else {
-        return std.json.stringifyAlloc(self.alloc, .{}, .{});
+        return error.ClientNotFound;
     }
 
     const transactions = try self._db.prepare(struct { cliente_id: usize }, DbTransaction, "SELECT * FROM transacoes WHERE cliente_id = :cliente_id ORDER BY realizada_em DESC LIMIT 10");
@@ -115,7 +148,7 @@ pub fn get(self: *Self, id: usize) ![]const u8 {
         try self.transactions.put(pTransacao.realizada_em, internal);
     }
 
-    return try self.toJSON(c);
+    return c;
 }
 
 pub const DateTime = struct {
