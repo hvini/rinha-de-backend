@@ -1,6 +1,11 @@
 const std = @import("std");
 const zap = @import("zap");
-const sqlite = @import("sqlite.zig");
+const sqlite = @import("wrapper/sqlite.zig");
+const Client = @import("structs/client.zig").Client;
+const Transaction = @import("structs/transaction.zig").Transaction;
+const InternalTransaction = @import("structs/internal_transaction.zig").InternalTransaction;
+const DbTransaction = @import("structs/db_transaction.zig").DbTransaction;
+const TransactionDto = @import("structs/transaction_dto.zig").TransactionDto;
 
 alloc: std.mem.Allocator = undefined,
 lock: std.Thread.Mutex = undefined,
@@ -8,40 +13,6 @@ transactions: std.AutoArrayHashMap(i64, InternalTransaction) = undefined,
 _db: sqlite.Database = undefined,
 
 pub const Self = @This();
-
-pub const Client = struct {
-    id: usize,
-    limite: i64,
-    saldo_inicial: i64,
-};
-
-pub const TransactionRes = struct { valor: i64, tipo: []const u8, descricao: []const u8 };
-
-pub const DbTransaction = struct {
-    cliente_id: usize,
-    valor: i64,
-    tipo: sqlite.Text,
-    descricao: sqlite.Text,
-    realizada_em: i64,
-};
-
-pub const Transaction = struct {
-    valor: i64,
-    tipo: []const u8,
-    descricao: []const u8,
-    realizada_em: [20]u8,
-};
-
-pub const InternalTransaction = struct {
-    valorbuf: i64,
-    valorlen: usize,
-    tipobuf: [512]u8,
-    tipolen: usize,
-    descricaobuf: [512]u8,
-    descricaolen: usize,
-    realizadaembuf: i64,
-    realizadaemlen: usize,
-};
 
 pub fn init(a: std.mem.Allocator, db: sqlite.Database) Self {
     return .{
@@ -56,7 +27,7 @@ pub fn deinit(self: *Self) void {
     self.transactions.deinit();
 }
 
-pub fn add(self: *Self, client: Client, u: TransactionRes) ![]const u8 {
+pub fn add(self: *Self, client: Client, u: TransactionDto) ![]const u8 {
     if (!std.mem.eql(u8, u.tipo[0..], "d") and !std.mem.eql(u8, u.tipo[0..], "c")) {
         return error.InvalidType;
     }

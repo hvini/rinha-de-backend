@@ -1,9 +1,9 @@
 const std = @import("std");
 const zap = @import("zap");
 const ClientWeb = @import("clientweb.zig");
-const c = @import("c.zig");
-const errors = @import("errors.zig");
-const sqlite = @import("sqlite.zig");
+const c = @import("wrapper/c.zig");
+const errors = @import("wrapper/errors.zig");
+const sqlite = @import("wrapper/sqlite.zig");
 
 fn on_request(r: zap.Request) void {
     if (r.path) |the_path| {

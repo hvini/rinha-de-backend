@@ -1,9 +1,9 @@
 const std = @import("std");
 const zap = @import("zap");
 const Clients = @import("clients.zig");
-const Client = Clients.Client;
-const TransactionRes = Clients.TransactionRes;
-const sqlite = @import("sqlite.zig");
+const Client = @import("structs/client.zig").Client;
+const TransactionDto = @import("structs/transaction_dto.zig").TransactionDto;
+const sqlite = @import("wrapper/sqlite.zig");
 
 pub const Self = @This();
 
@@ -79,7 +79,7 @@ fn postClient(e: *zap.Endpoint, r: zap.Request) void {
         if (self.clientIdFromPath(path)) |id| {
             if (self._clients.get(id)) |client| {
                 if (r.body) |body| {
-                    if (std.json.parseFromSlice(TransactionRes, self.alloc, body, .{})) |u| {
+                    if (std.json.parseFromSlice(TransactionDto, self.alloc, body, .{})) |u| {
                         defer u.deinit();
                         if (self._clients.add(client, u.value)) |json| {
                             defer self.alloc.free(json);
