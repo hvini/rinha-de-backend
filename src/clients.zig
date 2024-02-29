@@ -9,8 +9,12 @@ const TransactionDto = @import("structs/transaction_dto.zig").TransactionDto;
 
 alloc: std.mem.Allocator = undefined,
 lock: std.Thread.Mutex = undefined,
-transactions: std.AutoArrayHashMap(i64, InternalTransaction) = undefined,
 _db: sqlite.Database = undefined,
+
+pub const A = struct {
+    client: Client,
+    transactions: std.AutoArrayHashMap(i64, InternalTransaction),
+};
 
 pub const Self = @This();
 
@@ -18,13 +22,8 @@ pub fn init(a: std.mem.Allocator, db: sqlite.Database) Self {
     return .{
         ._db = db,
         .alloc = a,
-        .transactions = std.AutoArrayHashMap(i64, InternalTransaction).init(a),
         .lock = std.Thread.Mutex{},
     };
-}
-
-pub fn deinit(self: *Self) void {
-    self.transactions.deinit();
 }
 
 pub fn add(self: *Self, client: Client, u: TransactionDto) ![]const u8 {
@@ -46,10 +45,6 @@ pub fn add(self: *Self, client: Client, u: TransactionDto) ![]const u8 {
         total += u.valor;
     }
 
-    // // We lock only on insertion, deletion, and listing
-    self.lock.lock();
-    defer self.lock.unlock();
-
     // update client
     const clientStmt = try self._db.prepare(struct { id: usize, saldo_inicial: i64 }, void, "UPDATE clientes SET saldo_inicial = :saldo_inicial WHERE id = :id");
     defer clientStmt.deinit();
@@ -58,6 +53,9 @@ pub fn add(self: *Self, client: Client, u: TransactionDto) ![]const u8 {
         .id = client.id,
         .saldo_inicial = total,
     });
+
+    self.lock.lock();
+    defer self.lock.unlock();
 
     // create transaction
     const transactionStmt = try self._db.prepare(DbTransaction, void, "INSERT INTO transacoes (cliente_id, valor, tipo, descricao, realizada_em) VALUES (:cliente_id, :valor, :tipo, :descricao, :realizada_em)");
@@ -77,7 +75,10 @@ pub fn add(self: *Self, client: Client, u: TransactionDto) ![]const u8 {
     }, .{});
 }
 
-pub fn get(self: *Self, id: usize) !Client {
+pub fn get(self: *Self, id: usize) !A {
+    self.lock.lock();
+    defer self.lock.unlock();
+
     const client = try self._db.prepare(struct { id: usize }, Client, "SELECT * FROM clientes WHERE id = :id");
     defer client.deinit();
 
@@ -97,11 +98,7 @@ pub fn get(self: *Self, id: usize) !Client {
     try transactions.bind(.{ .cliente_id = id });
     defer transactions.reset();
 
-    if (self.transactions.count() > 0) {
-        self.deinit();
-        self.transactions = std.AutoArrayHashMap(i64, InternalTransaction).init(self.alloc);
-    }
-
+    var list = std.AutoArrayHashMap(i64, InternalTransaction).init(self.alloc);
     while (try transactions.step()) |pTransacao| {
         var internal: InternalTransaction = undefined;
 
@@ -114,12 +111,10 @@ pub fn get(self: *Self, id: usize) !Client {
         internal.realizadaembuf = pTransacao.realizada_em;
         internal.realizadaemlen = 0;
 
-        self.lock.lock();
-        defer self.lock.unlock();
-        try self.transactions.put(pTransacao.realizada_em, internal);
+        try list.put(pTransacao.realizada_em, internal);
     }
 
-    return c;
+    return A{ .client = c, .transactions = list };
 }
 
 pub const DateTime = struct {
@@ -198,14 +193,14 @@ fn paddingTwoDigits(buf: *[2]u8, value: u8) void {
     }
 }
 
-pub fn toJSON(self: *Self, client: Client) ![]const u8 {
+pub fn toJSON(self: *Self, client: Client, transactions: std.AutoArrayHashMap(i64, InternalTransaction)) ![]const u8 {
     self.lock.lock();
     defer self.lock.unlock();
 
     var l: std.ArrayList(Transaction) = std.ArrayList(Transaction).init(self.alloc);
     defer l.deinit();
 
-    var it = JsonIteratorWithRaceCondition.init(&self.transactions);
+    var it = JsonIteratorWithRaceCondition.init(&transactions);
     while (it.next()) |transaction| {
         try l.append(transaction);
     }
@@ -227,7 +222,7 @@ const JsonIteratorWithRaceCondition = struct {
     it: std.AutoArrayHashMap(i64, InternalTransaction).Iterator = undefined,
     const This = @This();
 
-    pub fn init(internal_transactions: *std.AutoArrayHashMap(i64, InternalTransaction)) This {
+    pub fn init(internal_transactions: *const std.AutoArrayHashMap(i64, InternalTransaction)) This {
         return .{
             .it = internal_transactions.iterator(),
         };

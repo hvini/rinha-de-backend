@@ -44,7 +44,6 @@ pub fn main() !void {
 
         // /clients endpoint
         var clientWeb = ClientWeb.init(allocator, db, "/clientes");
-        defer clientWeb.deinit();
 
         // register endpoints with the listener
         try listener.register(clientWeb.endpoint());
@@ -56,13 +55,8 @@ pub fn main() !void {
 
         // and run
         zap.start(.{
-            .threads = 2000,
-            // IMPORTANT! It is crucial to only have a single worker for this example to work!
-            // Multiple workers would have multiple copies of the clients hashmap.
-            //
-            // Since zap is quite fast, you can do A LOT with a single worker.
-            // Try it with `zig build run-endpoint -Drelease-fast`
-            .workers = 1,
+            .threads = 4000,
+            .workers = 4,
         });
     }
 

@@ -24,10 +24,6 @@ pub fn init(a: std.mem.Allocator, db: sqlite.Database, client_path: []const u8) 
     };
 }
 
-pub fn deinit(self: *Self) void {
-    self._clients.deinit();
-}
-
 pub fn clients(self: *Self) *Clients {
     return &self._clients;
 }
@@ -57,17 +53,34 @@ fn getClient(e: *zap.Endpoint, r: zap.Request) void {
     const self = @fieldParentPtr(Self, "ep", e);
     if (r.path) |path| {
         if (self.clientIdFromPath(path)) |id| {
-            if (self._clients.get(id)) |client| {
-                if (self._clients.toJSON(client)) |json| {
-                    defer self.alloc.free(json);
-                    r.sendJson(json) catch return;
-                } else |err| {
-                    r.sendError(err, 500);
+            var i: usize = 0;
+            while (i < 3) {
+                if (self._clients.get(id)) |data| {
+                    if (self._clients.toJSON(data.client, data.transactions)) |json| {
+                        defer self.alloc.free(json);
+                        r.sendJson(json) catch return;
+                    } else |_| {
+                        r.setStatus(zap.StatusCode.bad_request);
+                        r.markAsFinished(true);
+                        return;
+                    }
+                } else |err| switch (err) {
+                    error.SQLITE_BUSY => {
+                        i += 1;
+                        if (i <= 3) {
+                            std.time.sleep(90000);
+                            continue;
+                        }
+                        r.setStatus(zap.StatusCode.internal_server_error);
+                        r.markAsFinished(true);
+                        return;
+                    },
+                    else => {
+                        r.setStatus(zap.StatusCode.not_found);
+                        r.markAsFinished(true);
+                        return;
+                    },
                 }
-            } else |_| {
-                r.setStatus(zap.StatusCode.not_found);
-                r.markAsFinished(true);
-                return;
             }
         }
     }
@@ -76,24 +89,58 @@ fn getClient(e: *zap.Endpoint, r: zap.Request) void {
 fn postClient(e: *zap.Endpoint, r: zap.Request) void {
     const self = @fieldParentPtr(Self, "ep", e);
     if (r.path) |path| {
-        if (self.clientIdFromPath(path)) |id| {
-            if (self._clients.get(id)) |client| {
-                if (r.body) |body| {
-                    if (std.json.parseFromSlice(TransactionDto, self.alloc, body, .{})) |u| {
-                        defer u.deinit();
-                        if (self._clients.add(client, u.value)) |json| {
-                            defer self.alloc.free(json);
-                            r.sendJson(json) catch return;
-                        } else |err| {
-                            r.sendError(err, 422);
+        if (r.body) |body| {
+            if (std.json.parseFromSlice(TransactionDto, self.alloc, body, .{})) |u| {
+                defer u.deinit();
+                if (self.clientIdFromPath(path)) |id| {
+                    var i: usize = 0;
+                    while (i < 3) {
+                        if (self._clients.get(id)) |data| {
+                            if (self._clients.add(data.client, u.value)) |json| {
+                                defer self.alloc.free(json);
+                                r.sendJson(json) catch return;
+                            } else |err| switch (err) {
+                                error.SQLITE_BUSY => {
+                                    i += 1;
+                                    if (i <= 3) {
+                                        std.time.sleep(90000);
+                                        continue;
+                                    }
+                                    r.setStatus(zap.StatusCode.internal_server_error);
+                                    r.markAsFinished(true);
+                                    return;
+                                },
+                                else => {
+                                    //422
+                                    r.setStatus(zap.StatusCode.bad_request);
+                                    r.markAsFinished(true);
+                                    return;
+                                },
+                            }
+                        } else |err| switch (err) {
+                            error.SQLITE_BUSY => {
+                                i += 1;
+                                if (i <= 3) {
+                                    std.time.sleep(90000);
+                                    continue;
+                                }
+                                r.setStatus(zap.StatusCode.internal_server_error);
+                                r.markAsFinished(true);
+                                return;
+                            },
+                            else => {
+                                r.setStatus(zap.StatusCode.not_found);
+                                r.markAsFinished(true);
+                                return;
+                            },
                         }
-                    } else |err| {
-                        r.sendError(err, 422);
                     }
                 }
             } else |_| {
-                r.setStatus(zap.StatusCode.not_found);
+                //422
+                r.setStatus(zap.StatusCode.bad_request);
                 r.markAsFinished(true);
+                return;
             }
         }
     }
