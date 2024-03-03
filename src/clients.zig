@@ -10,19 +10,20 @@ const TransactionDto = @import("structs/transaction_dto.zig").TransactionDto;
 alloc: std.mem.Allocator = undefined,
 lock: std.Thread.Mutex = undefined,
 _db: sqlite.Database = undefined,
-
-pub const A = struct {
-    client: Client,
-    transactions: std.AutoArrayHashMap(i64, InternalTransaction),
-};
+transactions: std.AutoArrayHashMap(i64, InternalTransaction) = undefined,
 
 pub const Self = @This();
+
+pub fn deinit(self: *Self) void {
+    self.transactions.deinit();
+}
 
 pub fn init(a: std.mem.Allocator, db: sqlite.Database) Self {
     return .{
         ._db = db,
         .alloc = a,
         .lock = std.Thread.Mutex{},
+        .transactions = std.AutoArrayHashMap(i64, InternalTransaction).init(a),
     };
 }
 
@@ -69,13 +70,14 @@ pub fn add(self: *Self, client: Client, u: TransactionDto) ![]const u8 {
         .realizada_em = std.time.timestamp(),
     });
 
-    return std.json.stringifyAlloc(self.alloc, .{
+    var res = .{
         .limite = client.limite,
         .saldo = total,
-    }, .{});
+    };
+    return std.json.stringifyAlloc(self.alloc, res, .{});
 }
 
-pub fn get(self: *Self, id: usize) !A {
+pub fn get(self: *Self, id: usize) !Client {
     self.lock.lock();
     defer self.lock.unlock();
 
@@ -98,7 +100,11 @@ pub fn get(self: *Self, id: usize) !A {
     try transactions.bind(.{ .cliente_id = id });
     defer transactions.reset();
 
-    var list = std.AutoArrayHashMap(i64, InternalTransaction).init(self.alloc);
+    if (self.transactions.count() > 0) {
+        self.transactions.deinit();
+        self.transactions = std.AutoArrayHashMap(i64, InternalTransaction).init(self.alloc);
+    }
+
     while (try transactions.step()) |pTransacao| {
         var internal: InternalTransaction = undefined;
 
@@ -111,10 +117,10 @@ pub fn get(self: *Self, id: usize) !A {
         internal.realizadaembuf = pTransacao.realizada_em;
         internal.realizadaemlen = 0;
 
-        try list.put(pTransacao.realizada_em, internal);
+        try self.transactions.put(pTransacao.realizada_em, internal);
     }
 
-    return A{ .client = c, .transactions = list };
+    return c;
 }
 
 pub const DateTime = struct {
@@ -193,14 +199,14 @@ fn paddingTwoDigits(buf: *[2]u8, value: u8) void {
     }
 }
 
-pub fn toJSON(self: *Self, client: Client, transactions: std.AutoArrayHashMap(i64, InternalTransaction)) ![]const u8 {
+pub fn toJSON(self: *Self, client: Client) ![]const u8 {
     self.lock.lock();
     defer self.lock.unlock();
 
     var l: std.ArrayList(Transaction) = std.ArrayList(Transaction).init(self.alloc);
     defer l.deinit();
 
-    var it = JsonIteratorWithRaceCondition.init(&transactions);
+    var it = JsonIteratorWithRaceCondition.init(&self.transactions);
     while (it.next()) |transaction| {
         try l.append(transaction);
     }

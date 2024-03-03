@@ -31,7 +31,7 @@ pub fn main() !void {
                 .port = 3000,
                 .on_request = on_request,
                 .log = true,
-                .max_body_size = 100 * 1024 * 1024,
+                //.max_body_size = 100 * 1024 * 1024,
             },
         );
         defer listener.deinit();
@@ -44,6 +44,7 @@ pub fn main() !void {
 
         // /clients endpoint
         var clientWeb = ClientWeb.init(allocator, db, "/clientes");
+        defer clientWeb.deinit();
 
         // register endpoints with the listener
         try listener.register(clientWeb.endpoint());
@@ -55,8 +56,8 @@ pub fn main() !void {
 
         // and run
         zap.start(.{
-            .threads = 4000,
-            .workers = 4,
+            .threads = 2000,
+            .workers = 1,
         });
     }
 
